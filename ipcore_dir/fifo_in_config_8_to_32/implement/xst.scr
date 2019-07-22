@@ -1,0 +1,13 @@
+run
+-ifmt VHDL
+-ent fifo_in_config_8_to_32_exdes 
+-p xc6vlx240t-ff1156-2
+-ifn xst.prj
+-write_timing_constraints No
+-iobuf YES
+-max_fanout 100
+-ofn fifo_in_config_8_to_32_exdes 
+-ofmt NGC
+-bus_delimiter ()
+-hierarchy_separator /
+-case Maintain
