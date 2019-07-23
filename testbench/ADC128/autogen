@@ -1,0 +1,354 @@
+#!/usr/local/bin/perl 
+#
+#  Copyright (C) 1999 Free Model Foundry
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License version 2 as
+#  published by the Free Software Foundation.
+#
+# MODIFICATION HISTORY :
+#
+# version no |	author	|	mod. date	|	changes made
+# v1.0         R. Munden	97MAY12			initial public release
+# v1.1         R. Munden	97MAY15			added ftm template generation
+# v1.1.1       R. Munden	97MAY23			allow for "." and spaces in 
+#                                           chips_prt pin name
+# v1.1.2       R. Munden   98MAY26          made minor convenience mods
+# v1.2         R. Munden   98JUN28          enhanced for handling busses
+# v1.2.1       R. Munden   98OCT13          fixed handling of vectored pins (A<3>)
+# v1.2.2       R. Munden   99JAN14          more hacking at bus handling
+# v1.3         R. Munden  99 SEP 07        removed ftm, map support, added today
+#
+
+print "Autogen VITAL model generator version 1.3\n";
+
+if ($ARGV[0] eq "") {print "Usage: autogen <path/chips_prt>\n"; exit;}
+
+sub today {
+   $date1 = `date`;
+   ($dum, $month, $dum2) = split / /, $date1;
+   $year = `date +%y` ; chop $year;
+   $day  = `date +%d` ; chop $day;
+   return ( $year . " " . $month . " " . $day ) ;
+}
+
+# test for "src" directory - if not present, create one
+
+if ( !-e "src") {
+    mkdir ("src",0755);
+}
+
+# test for "TimingModels" directory - if not present, create one
+
+if ( !-e "TimingModels") {
+    mkdir ("TimingModels",0755);
+}
+
+
+# open files for i/o
+
+$CHIPFILE = "$ARGV[0]/chips_prt";
+$OUTFILE = "src/$ARGV[0].vhd";
+print $CHIPFILE,"\n";
+print $OUTFILE,"\n";
+
+# get primitive name and make conform to VHDL if needed
+
+$vprim = "$ARGV[0]";
+if ( $vprim =~ /^[0-9]/ ) {
+   $vprim = "T".$vprim;
+   }
+
+if (-e $OUTFILE) {
+	print ($OUTFILE," already exists. Overwrite .vhd? (y/n) ");
+	$ans = <STDIN>;
+	if ($ans !~ (/y/)) { die "run aborted\n"; }
+}
+
+$DIR = "$ARGV[0]";
+$model = $vprim;
+$model =~ tr/a-z/A-Z/;
+
+
+$FIELD1 = "";
+$PN = 0;		# number of pins found
+$LASTPN = 0;    # for use with busses
+$ECL = "false";
+@DEFAULTVALUE = "'U'";
+@OUTTYPE = "";
+$flattened = "false";
+$primitive = "";
+$complex = "false";
+
+
+print "pins found:","\n";
+
+open (CHIPS, $CHIPFILE) ||  die "can't open $ARGV[0]/chips_prt\n";
+
+#	Read until the pin list is reached
+
+$_ = <CHIPS>;
+$_ =~ tr/a-z/A-Z/;
+chop;
+while (! /PIN$/) {
+	$_ = <CHIPS>;
+	$_ =~ tr/a-z/A-Z/;
+	chop;
+    ($FIELD1, $prim) = split(/'/);
+    if ($FIELD1 =~ /PRIMITIVE/) {
+        $primitive = $prim;
+    }
+}
+
+#	read until the END_PIN is reached
+
+while (! /END_PIN/) {
+	($FIELD1, $PINNAME, $BITS) = split(/'/);
+	if (($FIELD1 !~ (/[a-zA-Z]/)) && ($PINNAME =~ (/./))) {
+		$PN++;
+    	$PINNAME =~ s/\.//g;    # remove dots from pin name
+    	$BITS =~ s/://;
+    	$VECT[$PN] = $BITS;
+    	$BITS =~ s/<|>|\s//g;
+    	if ($BITS =~ /\.\./) {
+            $flattened = "false";
+            $complex = "true";
+            $BITS =~ s/\.\./ /;
+            ($high, $low) = split(" ", $BITS);
+  print $high," to ",$low,"\n";
+            for ($range = $low; $range <= $high; $range++) {
+                if ($range > $low) { $PN++; }
+                $TMPPIN = $PINNAME;
+                $TMPPIN = $TMPPIN . $range;
+		        $PIN[$PN] = $TMPPIN;
+            }
+        }
+    	elsif (($BITS =~ /[0-9]/) or $flattened =~ "true") {
+        	$flattened = "true";
+			$PINNAME = $PINNAME . $BITS;
+    	}
+		if ($PINNAME =~ (/-/)) {
+			$TMPNAME = substr($PINNAME,1,24);
+			$PINNAME = $TMPNAME."Neg";
+		}
+    	if ( $PINNAME =~ /^[0-9]/ ) {
+        	$PINNAME = "N".$PINNAME;
+    	}
+		if ($BITS !~ /\s/) {
+			$PIN[$PN] = $PINNAME; 
+        }
+	}
+	if ($FIELD1 =~ /PUT/) {
+		$tmppn = $LASTPN;
+		while ($tmppn < $PN) {
+			$tmppn++;
+			$INPIN[$tmppn] = "";
+			$OUTPIN[$tmppn] = "";
+			$OUTTYPE[$tmppn] = "";
+			if ($FIELD1 =~ (/INPUT_LOAD/)) {
+				$INPIN[$tmppn] = IN;
+			}
+
+			if ($FIELD1 =~ (/OUTPUT_LOAD/)) {
+				$OUTPIN[$tmppn] = OUT;
+			}
+
+			if ($FIELD1 =~ (/OUTPUT_TYPE/)) {
+				$OUTTYPE[$tmppn] = $PINNAME;
+				if ($PINNAME =~ (/(OE,OR)/)) { $ECL = "true"; }
+			}
+		}
+		$LASTPN = $PN;
+	}
+
+	if ($FIELD1 =~ (/END_PRIMITIVE/i)) { last; }
+
+	$_ = <CHIPS>;
+	$_ =~ tr/a-z/A-Z/;
+	chop;
+}
+
+# look for undefined pins and make them inout
+
+for ($I = 1; $I <= $PN; $I++)
+{
+    if (($INPIN[$I] ne 'IN') && ( $OUTPIN[$I] ne 'OUT')) {
+        $INPIN[$I] = IN;
+        $OUTPIN[$I] = OUT;
+    }
+}
+
+for ($I = 1; $I <= $PN; $I++)
+{
+	print ($PIN[$I]," ",$INPIN[$I],$OUTPIN[$I],$OUTTYPE[$I],"\n");
+	$DEFAULTVALUE[$I] = "'U'";
+	if (($INPIN[$I] =~ "IN") && ($ECL =~ "true")) {
+		$DEFAULTVALUE[$I] = "'0'";
+	}
+}
+
+$VPRIM = uc($vprim);
+print "ECL = ",$ECL,"\n";
+
+open (OUT, ">$OUTFILE");
+
+print OUT ("-" x 80,"\n");
+print OUT ("--  ","File Name: $vprim.vhd\n");
+print OUT ("-" x 80,"\n");
+print OUT ("--  ","Copyright (C) 1999 Free Model Foundry\n");
+print OUT ("-- ","\n");
+print OUT ("--  ","This program is free software; you can redistribute it and/or modify\n");
+print OUT ("--  ","it under the terms of the GNU General Public License version 2 as\n");
+print OUT ("--  ","published by the Free Software Foundation.\n");
+print OUT ("-- ","\n");
+print OUT ("--  MODIFICATION HISTORY:\n");
+print OUT ("-- ","\n");
+print OUT ("--  version: |  author:  | mod date: | changes made:\n");
+print OUT ("--    V1.0    R. Munden    ",today, "   Initial release\n");
+print OUT ("-- ","\n");
+print OUT ("-" x 80,"\n");
+print OUT ("--  PART DESCRIPTION:\n");
+print OUT ("-- ","\n");
+print OUT ("--  Library:    X\n");
+print OUT ("--  Technology: X\n");
+print OUT ("--  Part:       $VPRIM\n");
+print OUT ("-- ","\n");
+print OUT ("--  Description: X\n");
+print OUT ("-" x 80,"\n");
+print OUT ("\n");
+print OUT ("LIBRARY IEEE;   USE IEEE.std_logic_1164.ALL;\n");
+print OUT ("                USE IEEE.VITAL_timing.ALL;\n");
+print OUT ("                USE IEEE.VITAL_primitives.ALL;\n");
+print OUT "LIBRARY FMF;    USE FMF.gen_utils.ALL;\n";
+if ($ECL =~ "true") {
+	print OUT "                USE FMF.ecl_utils.ALL;\n";
+}
+if ($complex =~ "true") {
+	print OUT "                USE FMF.conversions.ALL;\n";
+}
+print OUT ("\n");
+print OUT ("-" x 80,"\n");
+print OUT "-- ENTITY DECLARATION\n";
+print OUT ("-" x 80,"\n");
+print OUT ("ENTITY $vprim IS\n");
+print OUT ("    GENERIC (\n");
+print OUT ("        -- tipd delays: interconnect path delays","\n");
+
+$ucvprim = uc($vprim);
+
+for ($i = 1; $i <= $PN; $i++)
+{
+	if ($INPIN[$i] =~ "IN") {
+			print OUT ' ' x 8,"tipd_";
+			print OUT $PIN[$i] . ' ' x (20 - length($PIN[$i]));
+			print OUT ": VitalDelayType01 := VitalZeroDelay01;\n";
+	}
+}
+print OUT ("        -- tpd delays","\n");
+for ($i = 1; $i <= $PN; $i++) {
+    if ($INPIN[$i] =~ "IN") {
+		for ($j = 1; $j <= $PN; $j++) {
+			if (($OUTPIN[$j] =~ "OUT") && ($PIN[$j] !~ "VBB")) {
+					print OUT ' ' x 8,"tpd_";
+					print OUT $PIN[$i],"_",$PIN[$j];
+					print OUT ' ' x (20 - (length($PIN[$i]) + length($PIN[$j])));
+					print OUT ": VitalDelayType01 := UnitDelay01;\n";
+			}
+		}
+	}
+}
+print OUT ("        -- generic control parameters","\n");
+print OUT (" " x 8,"InstancePath        : STRING    := DefaultInstancePath;\n");
+print OUT (" " x 8,"TimingChecksOn      : BOOLEAN   := DefaultTimingChecks;\n");
+print OUT (" " x 8,"MsgOn               : BOOLEAN   := DefaultMsgOn;\n");
+print OUT (" " x 8,"XOn                 : BOOLEAN   := DefaultXon;\n");
+print OUT ' ' x 8,"-- For FMF SDF technology file usage\n";
+print OUT (" " x 8,"TimingModel         : STRING    := DefaultTimingModel\n");
+print OUT ' ' x 4, ");\n";
+print OUT ("    PORT (\n");
+
+if ($ECL =~ "true") {
+	print OUT ' ' x 8, "-- 0 denotes pull-down resistor\n";
+}
+
+for ($i = 1; $i <= ($PN-1); $i++) {
+    if ($PIN[$i] =~ /0$/) {
+        $tmppin1 = $PIN[$i];
+        $tmppin2 = $PIN[$i + 1];
+        chop $tmppin1; chop $tmppin2;
+        if ($tmppin1 !~ $tmppin2) {
+            $PIN[$i] =~ s/0$//;
+        } else {
+            $complex = "true";
+        }
+    }
+	print OUT ' ' x 8, $PIN[$i],' ' x (16 - length($PIN[$i]));
+	print OUT ": " . $INPIN[$i],$OUTPIN[$i],' ' x (6 - (length($INPIN[$i]) + length($OUTPIN[$i])));
+	print OUT "std_logic := ",$DEFAULTVALUE[$i],";\n";
+}
+	print OUT ' ' x 8, $PIN[$i],' ' x (16 - length($PIN[$i]));
+	print OUT ": " . $INPIN[$i],$OUTPIN[$i],' ' x (6 - (length($INPIN[$i]) + length($OUTPIN[$i])));
+	print OUT "std_logic := ",$DEFAULTVALUE[$i],"\n";
+print OUT ' ' x 4, ");\n";
+
+print OUT ("    ATTRIBUTE VITAL_LEVEL0 of $vprim : ENTITY IS TRUE;\n");
+print OUT ("END $vprim;\n");
+print OUT ("\n");
+print OUT ("-" x 80,"\n");
+print OUT ("-- ","ARCHITECTURE DECLARATION\n");
+print OUT ("-" x 80,"\n");
+print OUT ("ARCHITECTURE vhdl_behavioral of $vprim IS\n");
+print OUT ("    ATTRIBUTE VITAL_LEVEL1 of vhdl_behavioral : ARCHITECTURE IS TRUE;\n");
+print OUT ("\n");
+for ($i = 1; $i <= $PN; $i++) {
+	if ($INPIN[$i] =~ "IN") {
+		print OUT ' ' x 4, "SIGNAL " . $PIN[$i],"_ipd";
+		print OUT ' ' x (16 - length($PIN[$i]));
+		print OUT ": std_ulogic := 'X';\n";
+	}
+}
+print OUT ("\n");
+print OUT ("BEGIN\n");
+print OUT ("\n");
+print OUT ("    ","-" x 76,"\n");
+print OUT ("    -- ","Wire Delays\n");
+print OUT ("    ","-" x 76,"\n");
+print OUT ("    WireDelay : BLOCK\n");
+print OUT ("    BEGIN\n");
+print OUT ("\n");
+for ($i = 1; $i <= $PN; $i++) {
+	if ($INPIN[$i] =~ "IN") {
+		print OUT ' ' x 8, "w_",$i," : VitalWireDelay (",$PIN[$i],"_ipd, ",$PIN[$i],", tipd_",$PIN[$i],");\n";
+	}
+}
+print OUT ("\n");
+print OUT ("    END BLOCK;\n");
+print OUT ("\n");
+print OUT ("    --","-" x 74,"\n");
+print OUT ("    -- ","Concurrent procedure calls\n");
+print OUT ("    --","-" x 74,"\n");
+print OUT ("\n");
+
+if ($complex = "true") {
+    print OUT ("    --","-" x 74,"\n");
+    print OUT ("    -- ","Main Behavior Block\n");
+    print OUT ("    --","-" x 74,"\n");
+    print OUT ("    Behavior: BLOCK;\n");
+    print OUT ("\n");
+    print OUT ("    BEGIN;\n");
+    print OUT ("        --","-" x 70,"\n");
+    print OUT ("        -- ","Behavior Process\n");
+    print OUT ("        --","-" x 70,"\n");
+    print OUT ("    END BLOCK;\n");
+    print OUT ("END vhdl_behavioral;\n");
+
+} else {
+
+    print OUT ("    --","-" x 74,"\n");
+    print OUT ("    -- ","Main Behavior Process\n");
+    print OUT ("    --","-" x 74,"\n");
+    print OUT ("\n");
+    print OUT ("END vhdl_behavioral;\n");
+}
+close (CHIPS);
+close (OUT);

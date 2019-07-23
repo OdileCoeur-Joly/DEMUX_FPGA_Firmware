@@ -1,0 +1,1555 @@
+#!/apps/contrib/tcltk/bin/wish
+
+###########################################################################
+##  File Name: vhd2ftm
+###########################################################################
+##  Copyright (C) 1999 Free Model Foundry
+## 
+##  This program is free software; you can redistribute it and/or modify
+##  it under the terms of the GNU General Public License version 2 as
+##  published by the Free Software Foundation.
+###########################################################################
+## 
+##  MODIFICATION HISTORY:
+## 
+##  version: |  author:  | mod date: | changes made:
+##    V1.0     R. Steele   99 AUG 19   Initial release 
+##    V1.1     R. Steele   99 AUG 31   Corrected unmatched parens.;
+##                                     corrected fill data routines
+##    V1.2     R. Steele   99 AUG 31   Placed font into variable;
+## 
+###########################################################################
+
+
+set help_message {
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+VHD2FTM 
+Timing Generation Utility 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Usage: vhd2ftm <file.vhd>
+
+options:
+
+-help help for TCL/TK shell
+-h    help for TCL/TK shell
+
+-f  functional discription of script
+-2  decrease font size (to get all generics in)
++2  increase font size (window might not hold all generics)
++4  increase font size (small amount of generics)
+
+description:
+
+This utility generates the timing information for an FMF VHDL model.
+You use the generated file to paste into the main file.
+
+Enter the exact part number for which you wish to generate timing.
+Multiple part numbers for the same timing can be entered using 
+commas as delimiters.
+
+VHD2FTM produces three files: <part_number>.ftm, <model>.ftm and
+<part_number>.dat where <part_number> is the first part number entered
+for a set of data.  The file <model>.ftm is a template header and tail
+into which the other .ftm files created can be pasted.  Data for
+timing should be entered with the numeric key pad.  Cursor advances to
+next entry with numeric key pad enter key
+
+ENTER DATA AS LISTED IN THE DATA SHEET.  
+VHD2FTM swaps MIN and MAX for timingchecks.
+VHD2FTM fills in blank data for the .ftm file automatically.
+You only need to type in the largest and/or smallest numbers, leaving the
+missing data blank.
+
+The generate button generates the .ftm and .dat files.
+The save button generates the .dat file only.
+The exit button generates the .dat file only and ends the program.
+
+To restore a .dat file, enter the part number that matches the 
+<part_number>.dat file name
+
+}
+
+set tcltk_msg {
+ -help help for TCL/TK shell
+ -h    help for TCL/TK shell
+
+ -f    functional discription of script
+
+}
+
+## Globals
+set max_col 0
+set max_ent 0
+set help 0
+set disc 0
+set vhd_path none_given
+set opt_path none_given
+set part_num {}
+set part_numbs {}
+set part_num_list {}
+set fontsize 8
+set fontfamily {{interface user}}
+
+###########################################################################
+## Display help window
+###########################################################################
+proc ErrDisp {err_msg} {
+    global dummy fontfamily
+
+    frame .msg -bg lightblue -borderwidth 5 -relief ridge  
+    pack  .msg -fill both -side top 
+
+    frame .control -bg lightblue -borderwidth 10 
+    pack  .control  -side bottom -fill both  -expand true
+
+    button .control.exit   -text Done -command Done -font "$fontfamily 10 bold" -bg lightblue -activebackground lightblue
+    pack   .control.exit    -expand false 
+
+    message .msg.helpmsg -justify left -text $err_msg -bg lightblue  -font "$fontfamily 10 bold" -aspect 1000
+    pack    .msg.helpmsg
+    tkwait variable dummy
+    exit
+}
+
+###########################################################################
+## Setup main table and control frames
+###########################################################################
+proc SetupTable {} {
+    global fontsize fontfamily
+
+    frame .table -bg lightblue -borderwidth 5 -relief ridge  
+    pack  .table -fill both -side bottom
+
+    frame .control -bg lightblue -borderwidth 10 
+    pack  .control  -side top -fill both  -expand true
+
+    label  .control.parts  -text PARTS: -bg lightblue -font "$fontfamily $fontsize"
+    button .control.exit   -text EXIT -command Quit -font "$fontfamily $fontsize" -bg lightblue -activebackground red
+    button .control.gen    -text GENERATE -command Generate -font "$fontfamily $fontsize" -bg lightblue -activebackground green 
+    bind   .control.gen    <KP_Enter> Generate
+    bind   .control.gen    <Return> Generate
+    button .control.save   -text SAVE -command Save -font "$fontfamily $fontsize" -bg lightblue -activebackground yellow
+    entry  .control.partno -textvariable part_numbs -background white \
+                           -borderwidth 2 -relief sunken -width 10 -font "$fontfamily $fontsize"
+    bind   .control.partno <KP_Enter> GotParts
+    bind   .control.partno <Return> GotParts
+    pack   .control.exit   -side right  -expand false 
+    pack   .control.save   -side right  -expand false 
+    pack   .control.gen    -side right  -expand false 
+    pack   .control.parts  -side left -fill x -expand false
+    pack   .control.partno -side left -fill x -expand true
+}
+###########################################################################
+## Get single part number
+###########################################################################
+proc GetPart {index} {
+    global part_numbs part_num_list part_num
+
+    set part_num_list [split $part_numbs {,}]
+    set part_num [lindex $part_num_list $index]
+    set part_num [string trim $part_num]
+}
+
+###########################################################################
+## Done button; tkwait waits for dummy to be set
+###########################################################################
+proc Done {} {
+    global dummy
+    set dummy 1
+}
+
+###########################################################################
+## Exit routine
+###########################################################################
+proc Quit {} {
+    if {[SaveData] == 0} {
+        bell
+        puts stdout {}
+        puts stdout {Write permission error.}
+    } else {
+        exit
+    }
+}
+
+###########################################################################
+## Save routine
+###########################################################################
+proc Save {} {
+    if {[SaveData] == 0} {
+        bell
+        bell
+        bell
+        bell
+        puts stdout {}
+        puts stdout {Write permission error.}
+    }
+}
+
+###########################################################################
+## Save data to file
+###########################################################################
+proc SaveData {} {
+    global part_num max_ent time_data out_file part_numbs
+
+    GetPart 0
+
+    if {[string match "" $part_num]  == 1} {
+        set part_num Untitled
+    }
+
+    if {[OpenFileChan $part_num.dat] == 0} {
+        return 0
+    }
+
+    puts $out_file $part_numbs
+
+    set count 0
+    while {$count <= $max_ent} {
+        puts $out_file $time_data($count)
+        incr count
+    }
+
+    puts stdout {}
+    puts stdout "saved $part_num.dat"
+    puts stdout {}
+
+    close $out_file
+    return 1
+}
+
+###########################################################################
+## Generate button
+###########################################################################
+proc Generate {} {
+    global max_ent time_data part_numbs
+
+    if {[Buildftm] == 0} {
+        puts stdout {}
+        puts stdout {Could not generate timing file}
+        bell
+        return 0
+    } else {
+        puts stdout {}
+        puts stdout "Generated timing file for $part_numbs"
+    }
+
+    if {[SaveData] == 0} {
+        bell
+        puts stdout {}
+        puts stdout {Write permission error.}
+        return 0
+    } else {
+        focus .control.partno
+        set count 0
+        while {$count <= $max_ent} {
+            set time_data($count) {}
+            incr count
+        }
+        set part_numbs {}
+        return 1
+    }
+}
+ 
+###########################################################################
+## Open file for write
+###########################################################################
+proc OpenFileChan {path} {
+    global out_file
+
+    set out_file nothing
+
+    if {[file isfile $path] == 1} {
+        if {[file writable $path] == 0} {
+            puts stdout {}
+            puts stdout "Cannot write to: $path"
+            return 0
+        } else {
+            if {[file isfile $path.bak] == 1} {
+                if {[file writable $path.bak] == 0} {
+                    puts stdout {}
+                    puts stdout "Cannot write to: $path.bak"
+                    return 0
+                } else {
+                    file copy -force $path $path.bak
+                    puts stdout {}
+                    puts stdout "Backed up $path to $path.bak"
+                }
+            } else {
+                file copy -force $path $path.bak
+                puts stdout {}
+                puts stdout "Backed up $path to $path.bak"
+            }
+        }
+    }
+    set out_file [open $path w 0664]
+    return 1
+}
+###########################################################################
+## Read file
+###########################################################################
+proc ReadFile {path} {
+    global list 
+
+    if {[file isfile $path] == 0} {
+        return 0
+    }
+
+    if {[file readable $path] == 0} {
+        return 0
+    }
+
+    #read all data from file
+    set file_in [open $path r]
+    set in_data [read $file_in]
+    close $file_in
+    #strip newline characters
+    set list [split $in_data \n]
+
+    return 1
+}
+
+###########################################################################
+## Add an entry to table
+###########################################################################
+proc NewEntry {ent_num row col} { 
+    global max_col fontsize fontfamily
+
+    if {$col > $max_col} {
+        set max_col $col
+    }
+
+
+    entry .table.ent$ent_num -textvariable time_data($ent_num) -background white \
+                           -borderwidth 2 -relief sunken -width 4 -font "$fontfamily $fontsize"
+    grid  .table.ent$ent_num -sticky ew -padx 0 -pady 0 -row $row -column $col
+    bind  .table.ent$ent_num <KP_Enter> NextEntry
+    bind  .table.ent$ent_num <Return> NextEntry
+    bind  .table.ent$ent_num <Delete> {%W insert insert \.} 
+    bind  .table.ent$ent_num <Left> {%W insert insert 4} 
+    bind  .table.ent$ent_num <KeyRelease> {%W icursor end} 
+    bind  .table.ent$ent_num <Right> {%W insert insert 6} 
+
+    # This allows entries to stretch sticky set for ew
+    grid columnconfigure .table $col -weight 1
+}
+
+###########################################################################
+## Add a label for a new generic
+###########################################################################
+proc NewGenLbl {generic row col} {
+    global fontsize fontfamily
+
+    label .table.$generic$col -text $generic -bg lightblue -font "$fontfamily $fontsize" 
+    grid  .table.$generic$col -sticky e -ipadx 3 -ipady 0 -row $row -column $col
+}
+
+###########################################################################
+## Add a label with given text for an entry
+###########################################################################
+proc NewTxtLbl {generic row col txt} {
+    global fontsize fontfamily
+
+    label .table.$generic$col -text $txt -bg lightblue -font "$fontfamily $fontsize" 
+    grid  .table.$generic$col -sticky e -ipadx 1 -ipady 0 -row $row -column $col
+}
+
+###########################################################################
+## Add a new title label for title row 
+###########################################################################
+proc NewTtlLbl {row col txt} {
+    global fontfamily
+
+    label .table.ttl$txt$col -text $txt -bg lightblue -font {$fontfamily 10 bold} 
+    grid  .table.ttl$txt$col -sticky ew -ipadx 1 -ipady 0 -row $row -column $col
+}
+    
+###########################################################################
+## After each entry move to next entry
+###########################################################################
+proc NextEntry {} {
+    global max_ent
+
+    set current_focus [focus]
+    regexp -nocase {ent(.*)} $current_focus match ent_num
+    if {$ent_num == $max_ent} {
+        focus .control.gen
+    } else {
+        incr ent_num
+        focus .table.ent$ent_num
+    }
+}
+
+
+###########################################################################
+## After parts are entered ...
+###########################################################################
+proc GotParts {} {
+    global part_num list time_data max_ent part_numbs
+
+    GetPart 0
+
+    if {[ReadFile $part_num.dat] == 1} {
+        set count -2
+        foreach dataof $list {
+            if {$count == -2} {
+                set part_numbs $dataof
+                incr count
+                continue
+            }
+            incr count
+            if {$count <= $max_ent} {
+                set time_data($count) $dataof
+            }
+        }
+    } else {
+        puts stdout {}
+        puts stdout "Did not find a file named $part_num.dat"
+    }
+
+    focus .table.ent0
+
+}
+###########################################################################
+## Sort generics
+###########################################################################
+proc SortGens {} {
+    global \
+            cdelays_list delays_list ctiming_list timing_list pulse_list generic_list device_list\
+            regulardelay regulartiming conditionaldelay conditionaltiming pulsetiming devicetiming\
+            funca port1a port2a typea conda param1a
+
+
+    set linextend 0
+    set under _
+    set regulardelay 0
+    set regulartiming 0
+    set conditionaldelay 0
+    set conditionaltiming 0
+    set devicetiming 0
+    set pulsetiming 0
+    foreach generic $generic_list {
+        if {[regexp -nocase {(tpd)_([^_]+)_([^_]+)_([^:]+).*type([^:]+)} $generic match function port1 port2 cond type] == 1} {
+            set generic_name $function$under$port1$under$port2$under$cond
+            set generic_name [string trim $generic_name]
+            set cond [string trim $cond]
+            set type [string trim $type]
+            lappend cdelays_list $generic_name
+            set port1a($generic_name) $port1
+            set port2a($generic_name) $port2
+            set typea($generic_name) $type
+            set conda($generic_name) $cond
+            set conditionaldelay 1
+        } elseif {[regexp -nocase {(tpd)_([^_]+)_([^:]+).*type([^:]+)} $generic match function port1 port2 type] == 1} {
+            set generic_name $function$under$port1$under$port2
+            set generic_name [string trim $generic_name]
+            set port2 [string trim $port2]
+            set type [string trim $type]
+            lappend delays_list $generic_name
+            set port1a($generic_name) $port1
+            set port2a($generic_name) $port2
+            set typea($generic_name) $type
+            set regulardelay 1
+        } elseif {([regexp -nocase    {(tsetup)_([^_]+)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 cond type] == 1) || \
+                  ([regexp -nocase     {(thold)_([^_]+)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 cond type] == 1) || \
+                  ([regexp -nocase {(trecovery)_([^_]+)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 cond type] == 1) || \
+                  ([regexp -nocase  {(tremoval)_([^_]+)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 cond type] == 1)} {
+            set generic_name $function$under$port1$under$port2$under$cond
+            set generic_name [string trim $generic_name]
+            set cond [string trim $cond]
+            set type [string trim $type]
+            lappend ctiming_list $generic_name
+            set funca($generic_name) $function
+            set port1a($generic_name) $port1
+            set port2a($generic_name) $port2
+            set conda($generic_name) $cond
+            set conditionaltiming 1
+        } elseif {([regexp -nocase    {(tsetup)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 type] == 1) || \
+                  ([regexp -nocase     {(thold)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 type] == 1) || \
+                  ([regexp -nocase {(trecovery)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 type] == 1) || \
+                  ([regexp -nocase { (tremoval)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 port2 type] == 1)} {
+            set generic_name $function$under$port1$under$port2
+            set generic_name [string trim $generic_name]
+            set port2 [string trim $port2]
+            set type [string trim $type]
+            lappend timing_list $generic_name
+            set funca($generic_name) $function
+            set port1a($generic_name) $port1
+            set port2a($generic_name) $port2
+            set regulartiming 1
+        } elseif {([regexp -nocase     {(tpw)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 param1 type] == 1) || \
+                  ([regexp -nocase {(tperiod)_([^_]+)_([^:]+):.*type([^:]+):} $generic match function port1 param1 type] == 1)} {
+            set generic_name $function$under$port1$under$param1
+            set generic_name [string trim $generic_name]
+            set param1 [string trim $param1]
+            set type [string trim $type]
+            lappend pulse_list $generic_name
+            set funca($generic_name) $function
+            set port1a($generic_name) $port1
+            set param1a($generic_name) $param1
+            set pulsetiming 1
+        } elseif {([regexp -nocase {(tdevice)_([^:]+):.*type([^:]+):} $generic match function param1 type] == 1)} {
+            set generic_name $function$under$param1
+            set generic_name [string trim $generic_name]
+            set param1 [string trim $param1]
+            set type [string trim $type]
+            lappend device_list $generic_name
+            set funca($generic_name) $function
+            set param1a($generic_name) $param1
+            set devicetiming 1
+        # The following two conditions are a patch for a special case.
+        } elseif {[regexp -nocase {(tpd)_([^_]+)_([^_]+)_([^ ]+)} $generic \
+                match function port1 port2 cond] == 1} {
+            set generic_name $function$under$port1$under$port2$under$cond
+            set generic_name [string trim $generic_name]
+            set cond [string trim $cond]
+            lappend cdelays_list $generic_name
+            set port1a($generic_name) $port1
+            set port2a($generic_name) $port2
+            set conda($generic_name) $cond
+            set conditionaldelay 1
+            set linextend 1
+        } elseif {$linextend == 1} {
+            if {[regexp -nocase {:.*type([^:]+):} $generic match type] == 1} {
+                set type [string trim $type]
+                set typea($generic_name) $type
+                set linextend 0
+            } else {
+                puts stdout {}
+                puts stdout "Error: Can't handle $generic_name"
+                puts stdout "Please edit vhdl file such that generic is on one line"
+                exit
+            }
+        } else {
+            puts stdout "Ignored: $generic"
+        }
+    }
+
+}
+
+###########################################################################
+## Parse VHDL
+###########################################################################
+proc ParseVHD {} {
+    global list generic_list
+
+    lappend list This_is_the_end_of_the_list
+    set vhdl_section not_generics 
+    foreach line $list {
+        switch -- $vhdl_section {
+            not_generics {
+                if {[regexp -nocase {generic \(} $line match] == 1} {
+                    set vhdl_section generic_section
+                } elseif {[regexp {This_is_the_end_of_the_list} $line match] == 1} {
+                    puts stdout {Error: No generics!}
+                    exit
+                }
+            }
+            generic_section {
+                if {[regexp -nocase {port \(} $line match] == 1} {
+                    break
+                } else {
+                    lappend generic_list $line
+                }
+            }
+        }
+    }
+
+    unset list
+
+}
+
+    
+###########################################################################
+## Build a row for each generic
+###########################################################################
+proc BuildTable {} {
+    global \
+            ent_num max_ent \
+            cdelays_list delays_list ctiming_list timing_list pulse_list device_list \
+            regulardelay regulartiming conditionaldelay conditionaltiming pulsetiming devicetiming\
+            port1a port2a typea conda
+
+    set row 0
+    set col 0
+    set ent_num -1
+
+    if {$conditionaldelay == 1} {
+        foreach generic $cdelays_list {
+            set col 0
+            incr row
+            incr ent_num
+            if {[string match $typea($generic) 01Z] == 1} {
+                NewGenLbl $generic $row $col
+                incr col
+                NewTxtLbl $generic $row $col LH
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col HL
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                NewTxtLbl $generic $row $col LZ
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col ZH
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col HZ
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col ZL
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+            } else {
+                NewGenLbl $generic $row $col
+                incr col
+                NewTxtLbl $generic $row $col LH
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col HL
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+            }
+        }
+    }
+    if {$regulardelay == 1} {
+        foreach generic $delays_list {
+            set col 0
+            incr row
+            incr ent_num
+            if {[string match $typea($generic) 01Z] == 1} {
+                NewGenLbl $generic $row $col
+                incr col
+                NewTxtLbl $generic $row $col LH
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col HL
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                NewTxtLbl $generic $row $col LZ
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col ZH
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col HZ
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col ZL
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+            } else {
+                NewGenLbl $generic $row $col
+                incr col
+                NewTxtLbl $generic $row $col LH
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewTxtLbl $generic $row $col HL
+                incr col
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+                incr col
+                incr ent_num
+                NewEntry $ent_num $row $col
+            }
+        }
+    }
+    if {$conditionaltiming == 1} {
+        foreach generic $ctiming_list {
+            set col 0
+            incr row
+            incr ent_num
+            NewGenLbl $generic $row $col
+            incr col
+            NewTxtLbl $generic $row $col {  }
+            incr col
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+        }
+    }
+    if {$regulartiming == 1} {
+        foreach generic $timing_list {
+            set col 0
+            incr row
+            incr ent_num
+            NewGenLbl $generic $row $col
+            incr col
+            NewTxtLbl $generic $row $col {  }
+            incr col
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+        }
+    }
+
+    if {$pulsetiming == 1} {
+        foreach generic $pulse_list {
+            set col 0
+            incr row
+            incr ent_num
+            NewGenLbl $generic $row $col
+            incr col
+            NewTxtLbl $generic $row $col {  }
+            incr col
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+        }
+    }
+
+    if {$devicetiming == 1} {
+        foreach generic $device_list {
+            set col 0
+            incr row
+            incr ent_num
+            NewGenLbl $generic $row $col
+            incr col
+            NewTxtLbl $generic $row $col {  }
+            incr col
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+            incr col
+            incr ent_num
+            NewEntry $ent_num $row $col
+        }
+    }
+
+    set max_ent $ent_num
+
+}
+###########################################################################
+## Convert condition
+###########################################################################
+proc ConvCond {cond} {
+    global cond_out
+
+    set cond_out no_condition
+    set cond_out $cond
+    regsub -all -nocase {_} $cond_out { } cond_out
+    regsub -all -nocase {^NT } $cond_out {! } cond_out
+    regsub -all -nocase { NT } $cond_out { ! } cond_out
+    regsub -all -nocase { OR } $cond_out { || } cond_out
+    regsub -all -nocase { AN } $cond_out { \&\& } cond_out
+    regsub -all -nocase { EQ } $cond_out { == } cond_out
+
+}
+###########################################################################
+## Convert function
+###########################################################################
+proc ConvFunc {func} {
+    global func_out
+
+    set func_out no_function
+    set func_out $func
+    if {[regsub -nocase {tsetup} $func_out {SETUP} func_out] == 1} {
+        return
+    }
+    if {[regsub -nocase {thold} $func_out {HOLD} func_out] == 1} {
+        return
+    }
+    if {[regsub -nocase {tpw} $func_out {WIDTH} func_out] == 1} {
+        return
+    }
+    if {[regsub -nocase {tperiod} $func_out {PERIOD} func_out] == 1} {
+        return
+    }
+    if {[regsub -nocase {trecovery} $func_out {RECOVERY} func_out] == 1} {
+        return
+    }
+    if {[regsub -nocase {tremoval} $func_out {REMOVAL} func_out] == 1} {
+        return
+    }
+    if {[regsub -nocase {tskew} $func_out {SKEW} func_out] == 1} {
+        return
+    }
+    set func_out {???}
+}
+############################################################################
+## Fill Data 
+###########################################################################
+proc FillData {} {
+    global entdata
+
+    if {[string match {} $entdata(min)] == 1} {
+        if {[string match {} $entdata(typ)] == 1} {
+            set entdata(typ) $entdata(max)
+            set entdata(min) $entdata(typ)
+        } else {
+            set entdata(min) $entdata(typ)
+        }
+        return 1
+    }
+
+    if {[string match {} $entdata(typ)] == 1} {
+	if [catch {set entdata(typ) [expr ($entdata(max)+$entdata(min))/2]} emsg] {
+	    puts stdout "Could not calculate typ data for MAX=$entdata(max), and MIN=$entdata(min)"
+	}
+    }
+    
+    return 2
+}
+############################################################################
+## Fill Timing Data
+###########################################################################
+proc FillTimeData {} {
+    global entdata
+
+    if {[string match {} $entdata(max)] == 1} {
+        if {[string match {} $entdata(typ)] == 1} {
+            set entdata(typ) $entdata(min)
+            set entdata(max) $entdata(typ)
+        } else {
+            set entdata(max) $entdata(typ)
+        }
+        return 1
+    }
+
+    if {[string match {} $entdata(typ)] == 1} {
+	if [catch {set entdata(typ) [expr ($entdata(max)+$entdata(min))/2]} emsg] {
+	    puts stdout "Could not calculate typ data for MAX=$entdata(max), and MIN=$entdata(min)"
+	}
+    }
+
+    return 2
+}
+############################################################################
+## Output () if all data blank
+###########################################################################
+proc AllBlank {} {
+    global entdata
+
+    if {[string match {} $entdata(max)] == 1} {
+        if {[string match {} $entdata(typ)] == 1} {
+            if {[string match {} $entdata(min)] == 1} {
+                return 1
+            }
+        }
+    }
+
+    return 0
+
+}
+###########################################################################
+## Build the ftm file head and tail
+###########################################################################
+proc BuildHead {} {
+    global model out_file
+
+    set date_only [clock format [clock seconds] -format "%y %b %d"]
+
+    if {[regexp -nocase {([^\.]+)\.} $model match model_name] == 1} {
+        if {[OpenFileChan $model_name.ftm] == 0} {
+            puts "Error: Can't write to $model_name.ftm"
+            return 0
+        }
+    } else {
+        set model_name $model
+        if {[OpenFileChan $model.ftm] == 0} {
+            puts "Error: Can't write to $model.ftm"
+            return 0
+        }
+    }
+
+    puts $out_file "<!DOCTYPE FTML SYSTEM \"ftml.dtd\">"
+    puts $out_file "<FTML><HEAD><TITLE>FMF Timing for $model_name Parts<\/TITLE>"
+    puts $out_file "<BODY>"
+    puts $out_file "<REVISION.HISTORY>"
+    puts $out_file "version: |  author:  | mod date: | changes made:" 
+    puts $out_file "  V1.0      VHD2FTM    $date_only   Initial release"  
+    puts $out_file "</REVISION.HISTORY>" 
+    puts $out_file "<TIMESCALE>1ns</TIMESCALE>"
+    puts $out_file "<MODEL>$model_name" 
+    puts $out_file "" 
+    puts $out_file "</BODY></FTML>"
+
+    puts stdout "Wrote $model_name.ftm"
+    close $out_file
+    return 1
+}
+###########################################################################
+## Build the ftm file
+###########################################################################
+proc Buildftm {} {
+    global \
+            ent_num max_ent out_file time_data entdata\
+            cdelays_list delays_list ctiming_list timing_list pulse_list device_list\
+            regulardelay regulartiming conditionaldelay conditionaltiming pulsetiming devicetiming\
+            funca port1a port2a typea conda param1a part_num_list part_num cond_out func_out
+
+    set div /
+    set sdflabel {%LABEL%}
+    set sourcecomment  {<SOURCE></SOURCE>}
+    set regularcomment {<COMMENT></COMMENT>}
+    set enddirectives  {</TIMING></FMFTIME>}
+    GetPart 0
+
+    
+
+    if {[string match "" $part_num]  == 1} {
+        puts stdout {Error: No part numbers entered.}
+        return 0
+    }
+
+    if {[BuildHead] == 0} {
+        puts stdout "Did not build header"
+    }
+
+    if {[OpenFileChan $part_num.ftm] == 0} {
+        puts stdout "Error: Can't write to $part_num.ftm"
+        return 0
+    }
+
+    puts $out_file <FMFTIME>
+
+    set index 0
+    foreach dummy $part_num_list {
+        GetPart $index
+        puts $out_file "$part_num$sourcecomment"
+        incr index
+    }
+
+    puts $out_file $regularcomment
+    puts $out_file {<TIMING>}
+
+    set row 0
+    set col 0
+    set ent_num -1
+
+    puts $out_file {  (DELAY (ABSOLUTE}
+
+    if {$conditionaldelay == 1} {
+        foreach generic $cdelays_list {
+            if {[string match $typea($generic) 01Z] == 1} {
+                ConvCond $conda($generic)
+                puts -nonewline $out_file "    (COND $cond_out (IOPATH $port1a($generic) $port2a($generic) "  
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts $out_file "())) "
+                } else {
+                    FillData
+                    puts $out_file "($entdata(min):$entdata(typ):$entdata(max))))"
+                }
+            } else {
+                ConvCond $conda($generic)
+                puts -nonewline $out_file "    (COND $cond_out (IOPATH $port1a($generic) $port2a($generic) "  
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+		    FillData
+		    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts $out_file "())) "
+                } else {
+		    FillData
+		    puts  $out_file "($entdata(min):$entdata(typ):$entdata(max)))) "
+                }
+            }
+        }
+    }
+    if {$regulardelay == 1} {
+        foreach generic $delays_list {
+            if {[string match $typea($generic) 01Z] == 1} {
+                puts -nonewline $out_file "    (IOPATH $port1a($generic) $port2a($generic) "  
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+                    FillData
+                    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts $out_file "()) "
+                } else {
+                    FillData
+                    puts $out_file "($entdata(min):$entdata(typ):$entdata(max)))"
+                }
+            } else {
+                puts -nonewline $out_file "    (IOPATH $port1a($generic) $port2a($generic) "  
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts -nonewline $out_file "() "
+                } else {
+		    FillData
+		    puts -nonewline $out_file "($entdata(min):$entdata(typ):$entdata(max)) "
+                }
+
+                incr ent_num
+                set entdata(min) $time_data($ent_num)
+                incr ent_num
+                set entdata(typ) $time_data($ent_num)
+                incr ent_num
+                set entdata(max) $time_data($ent_num)
+                if {[AllBlank] == 1} {
+                    puts $out_file "()) "
+                } else {
+		    FillData
+		    puts $out_file "($entdata(min):$entdata(typ):$entdata(max))) "
+                }
+            }
+        }
+    }
+
+    puts $out_file {  ))}
+
+    if {($conditionaltiming == 1) || ($regulartiming == 1) || ($pulsetiming == 1)} {
+        puts $out_file {  (TIMINGCHECK}
+    }
+
+    if {$conditionaltiming == 1} {
+        foreach generic $ctiming_list {
+            ConvCond $conda($generic)
+            ConvFunc $funca($generic)
+            puts -nonewline $out_file "    ($func_out (COND $cond_out $port1a($generic)) $port2a($generic) "  
+
+            incr ent_num
+            set entdata(min) $time_data($ent_num)
+            incr ent_num
+            set entdata(typ) $time_data($ent_num)
+            incr ent_num
+            set entdata(max) $time_data($ent_num)
+	    if {[AllBlank] == 1} {
+		puts $out_file "()) "
+	    } else {
+		FillTimeData
+		puts $out_file "($entdata(max):$entdata(typ):$entdata(min))) "
+	    }
+        }
+    }
+    if {$regulartiming == 1} {
+        foreach generic $timing_list {
+            ConvFunc $funca($generic)
+            puts -nonewline $out_file "    ($func_out $port1a($generic) $port2a($generic) "  
+
+            incr ent_num
+            set entdata(min) $time_data($ent_num)
+            incr ent_num
+            set entdata(typ) $time_data($ent_num)
+            incr ent_num
+            set entdata(max) $time_data($ent_num)
+	    if {[AllBlank] == 1} {
+		puts $out_file "()) "
+	    } else {
+		FillTimeData
+		puts $out_file "($entdata(max):$entdata(typ):$entdata(min))) "
+	    }
+        }
+    }
+
+    if {$pulsetiming == 1} {
+        foreach generic $pulse_list {
+            ConvFunc $funca($generic)
+            puts -nonewline $out_file "    ($func_out ($param1a($generic) $port1a($generic)) "  
+
+            incr ent_num
+            set entdata(min) $time_data($ent_num)
+            incr ent_num
+            set entdata(typ) $time_data($ent_num)
+            incr ent_num
+            set entdata(max) $time_data($ent_num)
+	    if {[AllBlank] == 1} {
+		puts $out_file "()) "
+	    } else {
+		FillTimeData
+		puts $out_file "($entdata(max):$entdata(typ):$entdata(min))) "
+	    }
+        }
+    }
+
+    if {($conditionaltiming == 1) || ($regulartiming == 1) || ($pulsetiming == 1)} {
+        puts $out_file {  )}
+    }
+
+    if {$devicetiming == 1} {
+        foreach generic $device_list {
+            puts $out_file {  (CELL (CELLTYPE "VITALbuf")} 
+            puts -nonewline $out_file "    (INSTANCE $sdflabel$div$param1a($generic)) (DELAY (ABSOLUTE (DEVICE"  
+
+            incr ent_num
+            set entdata(min) $time_data($ent_num)
+            incr ent_num
+            set entdata(typ) $time_data($ent_num)
+            incr ent_num
+            set entdata(max) $time_data($ent_num)
+	    if {[AllBlank] == 1} {
+		puts $out_file "()))) "
+		puts $out_file "  )"
+	    } else {
+		FillTimeData
+		puts $out_file "($entdata(min):$entdata(typ):$entdata(max)))))"
+		puts $out_file "  )"
+	    }
+        }
+    }
+
+
+    puts $out_file $enddirectives
+    close $out_file
+}
+
+###########################################################################
+## Build Title row
+###########################################################################
+proc BuildTitle {} {
+    global max_col
+
+    NewTtlLbl 0 0 "Timing Genrics"
+    NewTtlLbl 0 2  MIN
+    NewTtlLbl 0 3  TYP
+    NewTtlLbl 0 4  MAX
+    if {$max_col > 7} {
+        NewTtlLbl 0 6  MIN
+        NewTtlLbl 0 7  TYP
+        NewTtlLbl 0 8  MAX
+    }
+    if {$max_col > 11} {
+        NewTtlLbl 0 10 MIN
+        NewTtlLbl 0 11 TYP
+        NewTtlLbl 0 12 MAX
+    }
+    if {$max_col > 15} {
+        NewTtlLbl 0 14 MIN
+        NewTtlLbl 0 15 TYP
+        NewTtlLbl 0 16 MAX
+    }
+    if {$max_col > 19} {
+        NewTtlLbl 0 18 MIN
+        NewTtlLbl 0 19 TYP
+        NewTtlLbl 0 20 MAX
+    }
+    if {$max_col > 23} {
+        NewTtlLbl 0 22 MIN
+        NewTtlLbl 0 23 TYP
+        NewTtlLbl 0 24 MAX
+    }
+}
+
+###########################################################################
+## command line processor
+###########################################################################
+proc ReadCommandLine {} {
+    global argv help help_message opt_path vhd_path model disc tcltk_msg fontsize
+
+    set command_data option_req
+    foreach command_arg $argv {
+        switch -- $command_data {
+            option_req {
+                switch -glob -- $command_arg {
+                    -h*  {set help 1}
+                    -f*  {set disc 1}
+                    -c*  {set help 1}
+                    -d*  {set help 1}
+                    -g*  {set help 1}
+                    -n*  {set help 1}
+                    -s*  {set help 1}
+                    -v*  {set help 1}
+                    -u*  {set help 1}
+                    -2*  {set fontsize 6}
+                    +2*  {set fontsize 10}
+                    +4*  {set fontsize 12}
+                    -opt {set command_data opt_path}
+                    default {
+                        set bad_option [regexp {^-} $command_arg]
+                        if { $bad_option == 1} {
+                            puts stdout {}
+                            puts stdout "Command line option: $command_arg is undefined."
+                            puts stdout {}
+                            ErrDisp $help_message
+                        } else {
+                            set vhd_path $command_arg
+                            if {[string match "" $command_arg] == 1} {
+                                puts stdout {}
+                                puts stdout {Error: no file given.}
+                                puts stdout {}
+                                ErrDisp $help_message
+                            }
+                        }
+                    }
+                }
+            }
+            opt_path {
+                set opt_path $command_arg
+                set command_data option_req
+            }
+        }
+    }
+
+    if {$help == 1} {
+        puts stdout {}
+        puts stdout $tcltk_msg
+        puts stdout {}
+        exit
+    }
+
+    ###########################################################################
+    ## Window Mangager Directives 
+    ###########################################################################
+    wm protocol . WM_DELETE_WINDOW Quit
+    wm title . "Timing Generation Utility"
+    wm geometry . +100+0
+
+    if {$disc == 1} {
+        ErrDisp $help_message
+    }
+
+    puts stdout [exec clear]
+    puts stdout {
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~                                                                        ~
+~                                 VHD2FTM                                ~
+~                                                                        ~
+~                         Timing Generation Utility                      ~
+~                                                                        ~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    }
+    if {[file writable .] == 0} {
+        puts stdout {}
+        puts stdout {Error: no write permission for the current directory.}
+        puts stdout {}
+        exit
+        ErrDisp {Error: no write permission for the current directory.}
+    }
+
+    if {[string match none_given $vhd_path] == 1} {
+        puts stdout {}
+        puts stdout {Error: no file name given.}
+        puts stdout {}
+        ErrDisp $help_message
+    }
+
+    if {[string match none_given $opt_path] != 1} {
+        if {[file isdirectory $opt_path] == 0} {
+            if {[file isfile $opt_path] == 1} {
+                puts stdout {}
+                puts stdout "ERROR: cannot create $opt_path directory"
+                puts stdout {}
+                exit
+                ErrDisp "ERROR: cannot create $opt_path directory"
+            } else {
+                file mkdir $opt_path
+            }
+        }
+    }
+
+    set model [file tail $vhd_path]
+    
+    if {[file isfile $vhd_path] == 0} {
+        puts stdout {}
+        puts stdout "ERROR: $vhd_path does not exist"
+        puts stdout {}
+        exit
+        ErrDisp "ERROR: $vhd_path does not exist\n"
+    }
+
+}
+
+###########################################################################
+## Main
+###########################################################################
+ReadCommandLine
+
+if {[ReadFile $vhd_path] == 0} {
+    puts stdout {}
+    puts stdout "Can't read $vhd_path"
+    exit
+}
+puts stdout {}
+puts stdout "Read $vhd_path"
+
+ParseVHD
+
+SortGens
+SetupTable
+BuildTable
+BuildTitle
+
+focus .control.partno

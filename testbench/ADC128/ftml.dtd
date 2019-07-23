@@ -1,0 +1,45 @@
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<!--
+
+		TimingModel DTD  Version 1.0
+
+		Date: September 16, 1996
+
+ -->
+
+<!--
+
+	To use this file include at the top of your timingmodel
+	<!DOCTYPE FTML SYSTEM "/pathway/ftml.dtd">
+
+ -->
+
+
+<!-- //////// BEGIN MODEL DEFINITIONS \\\\\\\\ -->
+
+<!ELEMENT FTML       - -  (HEAD, BODY) >
+
+<!ELEMENT HEAD       - -  (TITLE, AUTHOR, DATE) >
+
+<!ELEMENT TITLE      - -  (#PCDATA) >
+
+<!ELEMENT AUTHOR     - -  (#PCDATA) >
+
+<!ELEMENT DATE       - -  (#PCDATA) >
+
+<!ELEMENT BODY       - -  (SCALE, MODEL, FMFTIME+) >
+
+<!ELEMENT SCALE      - -  (#PCDATA) >
+
+<!ELEMENT MODEL      - -  (#PCDATA) >
+
+<!ELEMENT FMFTIME    - -  (((PART, SOURCE)+ | COMMENTS*)+, TIMING+) >
+
+<!ELEMENT PART       - -  (#PCDATA) >
+
+<!ELEMENT SOURCE     - -  (#PCDATA) >
+
+<!ELEMENT COMMENTS   - -  (#PCDATA) >
+
+<!ELEMENT TIMING     - -  (#PCDATA) >

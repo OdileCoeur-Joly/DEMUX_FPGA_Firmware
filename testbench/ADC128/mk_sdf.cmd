@@ -1,0 +1,10 @@
+SET sdffile_suffix .sdf
+SET use_global_timing_dir false
+SET timingfile_dir /foo
+SET time_scale 1ns
+SET local_path .
+SET vendor modeltech
+SET diagnostics on
+SET modelfile_dir /netlist
+SET vhdl_file blocktop.vhd
+SET RFV /tmp/New_model.vhd
